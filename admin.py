@@ -83,6 +83,35 @@ def fetch_status():
     
     return None
 
+def publish_tally(reconstructed_tally):
+    publish_url = SERVER_BASE_URL + "/publish_tally"
+    headers = {'Content-Type': 'application/json'}
+    try:
+        data = json.dumps(reconstructed_tally).encode('utf-8')
+        req = urllib.request.Request(
+            publish_url,
+            data=data,
+            method="POST",
+            headers=headers
+        )
+        with urllib.request.urlopen(req) as response:
+            response_body = response.read().decode('utf-8')
+            print("\n--- Tally Publication Response ---")
+            print(json.loads(response_body))
+            print("----------------------------------")
+    except HTTPError as e:
+        print(f"\nHTTP Error publishing tally: {e.code}")
+        try:
+            error_body = e.read().decode('utf-8')
+            print(json.loads(error_body))
+        except json.JSONDecodeError:
+            print("Could not parse error response as JSON.")
+    except URLError as e:
+        print(f"\nNetwork Error publishing tally: {e.reason}")
+    except Exception as e:
+        print(f"\nAn unexpected error occurred while publishing tally: {e}")
+        print("Failed to publish tally.")
+
 def get_tally_shares(share_id: int):
     share_url = f"{SERVER_BASE_URL}/get_tally_shares?share_id={share_id}"
     
@@ -167,6 +196,16 @@ def reconstruct_tally_from_shares():
             print(f"Error reconstructing tally for {candidate}: {e}. (Possible insufficient or bad shares)")
             reconstructed_tally[candidate] = "Reconstruction Failed"
     print("-" * 35)
+
+    # Check if all candidates were reconstructed successfully
+    if all(isinstance(v, int) for v in reconstructed_tally.values()):
+        publish_choice = input("\nDo you want to publish this final tally to make it viewable by clients? (yes/no): ").strip().lower()
+        if publish_choice == 'yes':
+            publish_tally(reconstructed_tally)
+        else:
+            print("Tally not published.")
+    else:
+        print("\nSkipping tally publication due to errors in reconstruction.")
 
 # Step 5: Define a small helper function that tells users how to run the script.
 #   It should provide the user with the options to Open, Close or Get the status of the election. 

@@ -17,6 +17,7 @@ from shamir import generate_shares, reconstruct, next_probable_prime_at_least, S
 TALLY_N_SHARES = 5 # total number of shares for each candidate's tally
 TALLY_THRESHOLD = 3 # minimum shares required to reconstruct the tally
 TALLY_SHAMIR_PRIME = next_probable_prime_at_least(1000) 
+PUBLIC_FINAL_TALLY = None
 
 
 # Step 2: Create a threading lock to protect concurrent access to shared data and a simple shared state container with an initial value of CLOSED.
@@ -199,6 +200,35 @@ class VotingServerHandler(BaseHTTPRequestHandler):
             except Exception as e:
                 print(f"An unexpected error occurred during signature verification: {e}")
                 self.respond(500, {"error": f"Internal server error during signature verification: {str(e)}"})
+        
+        elif self.path == '/publish_tally':
+            content_type = self.headers.get('Content-Type')
+            if content_type != 'application/json':
+                self.respond(400, {"error": "Content-Type must be application/json"})
+                return
+
+            content_length = int(self.headers['Content-Length'])
+            post_data = self.rfile.read(content_length)
+
+            try:
+                published_tally = json.loads(post_data.decode('utf-8'))
+                if not isinstance(published_tally, dict) or not all(c in published_tally for c in ALLOWED_CANDIDATES):
+                    self.respond(400, {"error": "Invalid tally format. Expected JSON object with candidate votes."})
+                    return
+
+            except json.JSONDecodeError:
+                self.respond(400, {"error": "Invalid JSON format for tally."})
+                return
+
+            with election_state_lock:
+                if ELECTION_STATE["status"] != "CLOSED":
+                    self.respond(403, {"error": "Tally can only be published when election is CLOSED."})
+                    return
+            
+                global PUBLIC_FINAL_TALLY
+                PUBLIC_FINAL_TALLY = published_tally
+                self.respond(200, {"message": "Final tally successfully published."})
+                print(f"ADMIN: Final tally published: {PUBLIC_FINAL_TALLY}")
 
         else:
             self.respond(404, {"error": "Endpoint not found"})
@@ -239,9 +269,12 @@ class VotingServerHandler(BaseHTTPRequestHandler):
                         TALLY_SHARES[candidate] = generate_shares(
                             count, TALLY_N_SHARES, TALLY_THRESHOLD, TALLY_SHAMIR_PRIME
                             )
+
+                    global PUBLIC_FINAL_TALLY
+                    PUBLIC_FINAL_TALLY = None # clear any previously published tally when election closes
                     
                     self.respond(200, {"message": "Election closed successfully."})
-                    print("ADMIN: Election state changed to CLOSED.")
+                    print("ADMIN: Election state changed to CLOSED. Tally shares generated.")
             
             elif self.path == '/reload_keys':
                 _load_public_keys_database_on_demand()
@@ -272,12 +305,21 @@ class VotingServerHandler(BaseHTTPRequestHandler):
                     self.respond(403, {"error": "Results can only be retrieved when the election is closed."})
                     print("Rejected results request: Election is open.")
                     return
+
+                global PUBLIC_FINAL_TALLY
+                if PUBLIC_FINAL_TALLY is None:
+                    self.respond(200, {
+                        "message": f"Election results are secured using Shamir Secret Sharing ({TALLY_THRESHOLD} of {TALLY_N_SHARES} shares required).",
+                        "instructions": "The administrator must reconstruct the results and then publish them before they are viewable here."
+                    })
+                    print("Results requested. Tally not yet published by admin.")
                 
-                self.respond(200, { # Inform client that results are secured by Shamir SS
-                    "message": f"Election results are secured using Shamir Secret Sharing ({TALLY_THRESHOLD} of {TALLY_N_SHARES} shares required).",
-                    "instructions": "An authorized tallier must reconstruct the results using shares retrieved from /get_tally_shares."
-                })
-                print("Results requested. Informed client about Shamir SS.")
+                else:
+                    self.respond(200, {
+                        "message": "Final Election Tally (Published by Administrator):",
+                        "tally": PUBLIC_FINAL_TALLY
+                    })
+                    print(f"Results requested. Publicly published tally returned: {PUBLIC_FINAL_TALLY}")
             
         elif path == '/get_tally_shares':
             with election_state_lock:

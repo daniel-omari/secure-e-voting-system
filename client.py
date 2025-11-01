@@ -14,7 +14,7 @@ import base64 # For encoding/decoding binary signatures to/from string for JSON
 # Step 2: Define the base URL of the server
 #   This should match the host and port used in server.py
 serverURL = "http://localhost:5000"
-privateKeyDir = Path("private_keys") # Directory where registrar saves private keys
+privateKeyDir = "private_keys" # Directory where registrar saves private keys
 # Client-side known allowed candidates for pre-validation (optional but good for UX)
 allowedCandidates = ["Alice", "Bob", "Charlie"]
 
@@ -22,15 +22,16 @@ allowedCandidates = ["Alice", "Bob", "Charlie"]
 #   This key is used to sign the vote before submission.
 #   The function should return an error if the voter ID is not an eligible voter.
 def loadPrivateVoterKey(voter_id: str) -> Optional[ec.EllipticCurvePrivateKey]:
-    privateKeyPath = privateKeyDir / f"{voter_id}_private.pem"
+    privateKeyPath = os.path.join(privateKeyDir, f"{voter_id}_private.pem")
     
-    if not privateKeyPath.exists():
+    if not os.path.exists(privateKeyPath):
         # The function should return an error if the voter ID is not an eligible voter.
         print(f"Error: Private key file for voter ID '{voter_id}' not found at {privateKeyPath}. Please ensure the voter is registered.")
         return None
     
     try:
-        raw = privateKeyPath.read_bytes()
+        with open(privateKeyPath, "rb") as f:
+            raw = f.read()
         private_key = serialization.load_pem_private_key(
             raw,
             password=None,
@@ -105,7 +106,7 @@ def submitVote(voter_id: str, candidate_name: str) -> None:
         return
 
     # Validate candidate on client-side for better UX (optional, server will also validate)
-    allowed = {c.lower(): c for c in CLIENT_ALLOWED_CANDIDATES}
+    allowed = {c.lower(): c for c in allowedCandidates}
     chosen_normalized = allowed.get(candidate_name.lower())
     if chosen_normalized is None:
         print(f"Error: Invalid candidate '{candidate_name}'. Allowed candidates are: {', '.join(allowedCandidates)}")
@@ -158,15 +159,35 @@ def fetchResults() -> None:
         response = requests.get(f"{serverURL}/results", timeout=5.0)
         response.raise_for_status()
         results = response.json()
+
+        # Ensure the response is a dictionary
+        if not isinstance(results, dict):
+            print("\nError: Server response is not a dictionary.")
+            print(json.dumps(results, indent=2))
+            return
+
+        # Case 1: Tally has been published and is available
+        if "tally" in results and results["tally"] is not None:
+            print("\n--- Final Election Tally (Published) ---")
+            if "message" in results: # Optionally print the message from the server
+                print(f"Server Message: {results['message']}")
+            for candidate, count in results["tally"].items():
+                print(f"- {candidate}: {count} votes")
+            print("----------------------------------------")
         
-        if isinstance(results, dict) and {"message", "instructions"} <= results.keys():
+        # Case 2: Election is closed, but tally is NOT yet published (server provides instructions)
+        # This condition requires both 'message' AND 'instructions' keys to be present.
+        elif "message" in results and "instructions" in results:
             print("\nElection Results Status:")
             print(f"- {results['message']}")
             print(f"- {results['instructions']}")
-            print("\nNote: Only an authorized administrator can reconstruct the final tally.")
+            print("\nNote: The administrator has not yet published the final tally after reconstruction.")
+            
+        # Case 3: If neither of the above, it's an unexpected format
         else:
             print("\nUnexpected results format. Server response:")
             print(json.dumps(results, indent=2))
+
         print("-" * 25)
 
     except requests.exceptions.HTTPError as e:
@@ -192,8 +213,8 @@ def main() -> None:
         # The voter ID must match a registered key.
         # We'll check if a private key file exists for this ID.
         input_voter_id = input("Enter your Voter ID (e.g., voter_1): ").strip()
-        candidate_keyfile = privateKeyDir / f"{input_voter_id}_private.pem"
-        if candidate_keyfile.exists():
+        candidate_keyfile = os.path.join(privateKeyDir, f"{input_voter_id}_private.pem")
+        if os.path.exists(candidate_keyfile):
             voter_id = input_voter_id
             if loadPrivateVoterKey(voter_id) is None:
                 print("Key file exists but could not be loaded. Please check the key file.")
