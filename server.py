@@ -138,7 +138,7 @@ class VotingServerHandler(BaseHTTPRequestHandler):
 
             voter_id = request_data.get('voter_id')
             candidate = request_data.get('candidate')
-            signature_b64 = request_data.get('signature')
+            sign_b64 = request_data.get('signature')
 
             # Check for any missing fields in the JSON data. Return an error response if any fields are missing.
             missing_fields = []
@@ -146,7 +146,7 @@ class VotingServerHandler(BaseHTTPRequestHandler):
                 missing_fields.append("voter_id")
             if candidate is None:
                 missing_fields.append("candidate")
-            if signature_b64 is None:
+            if sign_b64 is None:
                 missing_fields.append("signature")
 
             if missing_fields:
@@ -168,7 +168,7 @@ class VotingServerHandler(BaseHTTPRequestHandler):
                 return
 
             try:
-                signature = base64.b64decode(signature_b64)
+                signature = base64.b64decode(sign_b64)
             except (base64.binascii.Error, TypeError):
                 self.respond(400, {"error": "Invalid signature format (not valid base64)."})
                 print(f"Rejected vote from {voter_id} due to invalid signature format.")

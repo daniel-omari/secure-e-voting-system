@@ -9,42 +9,44 @@ from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.backends import default_backend
-from cryptography.exceptions import InvalidSignature
 import base64 # For encoding/decoding binary signatures to/from string for JSON
 
 # Step 2: Define the base URL of the server
 #   This should match the host and port used in server.py
-SERVER_URL = "http://localhost:5000"
-PRIVATE_KEYS_DIR = "private_keys" # Directory where registrar saves private keys
+serverURL = "http://localhost:5000"
+privateKeyDir = Path("private_keys") # Directory where registrar saves private keys
 # Client-side known allowed candidates for pre-validation (optional but good for UX)
-CLIENT_ALLOWED_CANDIDATES = ["Alice", "Bob", "Charlie"]
+allowedCandidates = ["Alice", "Bob", "Charlie"]
 
 # Step 3: Write a function that takes as input a voter ID and loads the voter's private key from a PEM file.
 #   This key is used to sign the vote before submission.
 #   The function should return an error if the voter ID is not an eligible voter.
-def load_private_key(voter_id):
-    private_key_filename = os.path.join(PRIVATE_KEYS_DIR, f"{voter_id}_private.pem")
-    if not os.path.exists(private_key_filename):
+def loadPrivateVoterKey(voter_id: str) -> Optional[ec.EllipticCurvePrivateKey]:
+    privateKeyPath = privateKeyDir / f"{voter_id}_private.pem"
+    
+    if not privateKeyPath.exists():
         # The function should return an error if the voter ID is not an eligible voter.
-        print(f"Error: Private key file for voter ID '{voter_id}' not found at {private_key_filename}. Please ensure the voter is registered.")
+        print(f"Error: Private key file for voter ID '{voter_id}' not found at {privateKeyPath}. Please ensure the voter is registered.")
         return None
+    
     try:
-        with open(private_key_filename, "rb") as f:
-            private_pem = f.read()
+        raw = privateKeyPath.read_bytes()
         private_key = serialization.load_pem_private_key(
-            private_pem,
-            password=None, # Assuming no encryption for private keys
+            raw,
+            password=None,
             backend=default_backend()
         )
+        
         return private_key
-    except Exception as e:
-        print(f"Error loading private key for voter ID '{voter_id}': {e}")
-        return None
+    
+    except ValueError as e:
+        print(f"Error: key file for '{voter_id}' appears corrupted or password-protected: {e}")
+    return None
 
 # Step 4: Write a function to sign the vote.
 #   Your function should take as input a private signing key and a candidate, and should return a signature.
 #   Convert signature to hex string for transmission
-def sign_vote(private_key, voter_id, candidate_name):
+def createVoteSignature(private_key: ec.EllipticCurvePrivateKey, voter_id: str, candidate_name: str) -> str:
     # The message to be signed must be consistent with what the server expects to verify.
     # It includes the voter_id and candidate_name.
     message = f"{voter_id},{candidate_name}"
@@ -58,14 +60,14 @@ def sign_vote(private_key, voter_id, candidate_name):
     # Convert signature to hex string for transmission (or base64, as used previously for JSON compatibility)
     # Base64 is typically better for binary data in JSON. The previous server example used base64,
     # so let's stick to base64 for consistency in transmission via JSON.
-    signature_b64 = base64.b64encode(signature).decode('utf-8')
-    return signature_b64
+    sign_b64 = base64.b64encode(signature).decode('utf-8')
+    return sign_b64
 
 # NEW Step 5: Write a function to get the status of the server.
 #   NEW Your function should return the current status, or an error message if the status cannot be retrieved.
-def get_election_status():
+def fetchElectionStatus(timeout: float = 3.0) -> Optional[str]:
     try:
-        response = requests.get(f"{SERVER_URL}/status")
+        response = requests.get(f"{serverURL}/status", timeout=timeout)
         response.raise_for_status()
         status_data = response.json()
         return status_data.get("status")
@@ -88,44 +90,47 @@ def get_election_status():
 #   Print the payload for testing purposes.
 #   Send a POST request to the /vote endpoint and raise an error if the server responds with a failure code (e.g. 400 or 500)
 #   Print the server's response (should be a confirmation message)
-def send_vote(voter_id, candidate_name):
-    election_status = get_election_status()
-    if election_status is None:
-        print("Error: Could not retrieve election status. Vote not submitted.")
+def submitVote(voter_id: str, candidate_name: str) -> None:
+    elect_status = fetchElectionStatus()
+    if elect_status is None:
+        print("Error: Could not determine election status. Vote not submitted.")
         return
-    if election_status != "OPEN":
-        print(f"Error: Election is {election_status}. Cannot submit vote when election is not OPEN.")
+    if elect_status != "OPEN":
+        print(f"Error: Election is {elect_status}. Cannot submit vote when election is not OPEN.")
         return
     
     # Load the private key for the given voter ID.
-    private_key = load_private_key(voter_id)
+    private_key = loadPrivateVoterKey(voter_id)
     if private_key is None:
-        return # Error message already printed by load_private_key
+        return
 
     # Validate candidate on client-side for better UX (optional, server will also validate)
-    if candidate_name not in CLIENT_ALLOWED_CANDIDATES:
-        print(f"Error: Invalid vote option '{candidate_name}'. Allowed candidates are: {', '.join(CLIENT_ALLOWED_CANDIDATES)}")
+    allowed = {c.lower(): c for c in CLIENT_ALLOWED_CANDIDATES}
+    chosen_normalized = allowed.get(candidate_name.lower())
+    if chosen_normalized is None:
+        print(f"Error: Invalid candidate '{candidate_name}'. Allowed candidates are: {', '.join(allowedCandidates)}")
         return
 
     # Generate a signature using the signing function in step 4.
-    signature = sign_vote(private_key, voter_id, candidate_name)
+    signature = createVoteSignature(private_key, voter_id, chosen_normalized)
 
     headers = {"Content-Type": "application/json"}
     # Include voter ID, candidate name, and signature in the payload.
     payload = {
         "voter_id": voter_id,
-        "candidate": candidate_name,
+        "candidate": chosen_normalized,
         "signature": signature
     }
 
     # Print the payload for testing purposes.
     print(f"\n--- Sending Vote Payload ---")
-    print(json.dumps(payload, indent=4))
+    print(json.dumps(payload, indent=2))
     print(f"----------------------------")
 
+    headers = {"Content-Type": "application/json"}
     try:
-        response = requests.post(f"{SERVER_URL}/vote", headers=headers, json=payload)
-        response.raise_for_status()  # Raise an exception for HTTP errors (4xx or 5xx)
+        response = requests.post(f"{serverURL}/vote", headers=headers, json=payload, timeout=5.0)
+        response.raise_for_status()  # raise an exception for HTTP errors
         print(f"Server response: {response.json()}")
     except requests.exceptions.HTTPError as e:
         print(f"Error sending vote: {e.response.json().get('error', e)}")
@@ -139,22 +144,22 @@ def send_vote(voter_id, candidate_name):
 #   Return an error message if status cannot be retrieved or status is "open".
 #   Send a GET request to the /results endpoint
 #   Print the vote tally in a readable format
-def get_results():
-    election_status = get_election_status()
-    if election_status is None:
-        print("Error: Could not retrieve election status. Results not fetched.")
+def fetchResults() -> None:
+    elect_status = fetchElectionStatus()
+    if elect_status is None:
+        print("Error: Could not retrieve election status.")
         return
 
-    if election_status != "CLOSED":
-        print(f"Error: Election is {election_status}. Results can only be retrieved when election is CLOSED.")
+    if elect_status != "CLOSED":
+        print(f"Error: Election is {elect_status}. Results can only be retrieved when election is CLOSED.")
         return
     
     try:
-        response = requests.get(f"{SERVER_URL}/results")
+        response = requests.get(f"{serverURL}/results", timeout=5.0)
         response.raise_for_status()
         results = response.json()
         
-        if "message" in results and "instructions" in results:
+        if isinstance(results, dict) and {"message", "instructions"} <= results.keys():
             print("\nElection Results Status:")
             print(f"- {results['message']}")
             print(f"- {results['instructions']}")
@@ -178,47 +183,60 @@ def get_results():
 #   If the user types a vote command, extract the candidate name and send the vote
 #   If the user types 'results', fetch and display the current tally
 #   NEW If the user types 'status', fetch and display the election status.
-def main():
+def main() -> None:
     print("Welcome to the Voting Client!")
     print("Please enter your Voter ID to proceed.")
 
-    voter_id = None
+    voter_id: Optional[str] = None
     while voter_id is None:
-        input_voter_id = input("Enter your Voter ID (e.g., voter_1): ").strip()
         # The voter ID must match a registered key.
         # We'll check if a private key file exists for this ID.
-        if os.path.exists(os.path.join(PRIVATE_KEYS_DIR, f"{input_voter_id}_private.pem")):
+        input_voter_id = input("Enter your Voter ID (e.g., voter_1): ").strip()
+        candidate_keyfile = privateKeyDir / f"{input_voter_id}_private.pem"
+        if candidate_keyfile.exists():
             voter_id = input_voter_id
-            print(f"Logged in as {voter_id}.")
+            if loadPrivateVoterKey(voter_id) is None:
+                print("Key file exists but could not be loaded. Please check the key file.")
+                voter_id = None
+            else:
+                print(f"Logged in as {voter_id}.")
         else:
-            print(f"Error: No private key found for '{input_voter_id}'. Please enter a valid registered Voter ID.")
-            # For strictness, you could also try to load the key immediately here to verify its integrity.
-            # However, `load_private_key` will do this later for the vote command.
+            print(f"No private key found for '{input_voter_id}'. Please try again.")
 
     print(f"\nCommands: 'vote <candidate_name>', 'results', 'exit'")
     while True:
-        command = input(f"\n{voter_id}> ").strip()
-        if command.lower() == "exit":
+
+        try:
+            command = input(f"\n{voter_id}> ").strip()
+        except (KeyboardInterrupt, EOFError):
+            print("\nExiting client.")
+            break
+
+        if not command:
+            continue
+        
+        cmd_lower = command.lower()
+        if cmd_lower == "exit":
             print("Exiting client.")
             break
 
-        elif command.lower() == "results":
-            get_results()
+        elif cmd_lower == "results":
+            fetchResults()
 
-        elif command.lower() == "status":
-            status = get_election_status()
+        elif cmd_lower == "status":
+            status = fetchElectionStatus()
             if status:
                 print(f"Current Election Status: {status}")
             else:
                 print("Failed to retrieve election status.")
 
-        elif command.lower().startswith("vote "):
-            parts = command.split(" ", 1) # Split only once to get the candidate name
-            if len(parts) > 1:
-                candidate = parts[1].strip()
-                send_vote(voter_id, candidate)
-            else:
+        elif cmd_lower.startswith("vote "):
+            _, candidate_part = command.split(" ", 1)
+            candidate = candidate_part.strip()
+            if candidate == "":
                 print("Invalid vote command. Usage: 'vote <candidate_name>'")
+            else:
+                submitVote(voter_id, candidate)
         else:
             print("Unknown command. Please use 'vote <candidate_name>', 'results', or 'exit'.")
 

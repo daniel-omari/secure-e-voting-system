@@ -9,11 +9,11 @@ from cryptography.hazmat.backends import default_backend
 
 # Constants for file names and directories
 PUBLIC_KEYS_DB_FILE = "public_keys.json"
-PRIVATE_KEYS_DIR = "private_keys"
+privateKeyDir = "private_keys"
 
 # Ensure the private keys directory exists
-if not os.path.exists(PRIVATE_KEYS_DIR):
-    os.makedirs(PRIVATE_KEYS_DIR)
+if not os.path.exists(privateKeyDir):
+    os.makedirs(privateKeyDir)
 
 # Step 2: Generate an ECDSA key pair for a given voter ID.
 #   The private key is saved locally; the public key is returned for inclusion in the public database.
@@ -33,10 +33,10 @@ def generate_key_pair(voter_id_prefix): # Corrected parameter name
         format=serialization.PrivateFormat.PKCS8,
         encryption_algorithm=serialization.NoEncryption()
     )
-    private_key_filename = os.path.join(PRIVATE_KEYS_DIR, f"{voter_id_prefix}_private.pem")
-    with open(private_key_filename, "wb") as f:
+    privateKeyPath = os.path.join(privateKeyDir, f"{voter_id_prefix}_private.pem")
+    with open(privateKeyPath, "wb") as f:
         f.write(private_pem)
-    print(f"Private key for voter {voter_id_prefix} saved to {private_key_filename}")
+    print(f"Private key for voter {voter_id_prefix} saved to {privateKeyPath}")
 
     # Serialize the public key to a PEM string (used by the server for signature verification)
     public_key = private_key.public_key()
