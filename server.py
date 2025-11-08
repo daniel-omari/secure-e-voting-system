@@ -4,6 +4,7 @@
 from http.server import BaseHTTPRequestHandler, HTTPServer
 import json
 import os
+import time # for rate limiting
 import threading # for threading lock
 from urllib.parse import urlparse, parse_qs # to parse URLs
 from cryptography.hazmat.primitives import hashes
@@ -43,6 +44,9 @@ TALLY_SHARES = {
 
 PUBLIC_KEYS_DB_FILE = "public_keys.json"
 PUBLIC_KEYS_DATABASE = {} # will hold loaded public keys
+
+LAST_REQUEST_TIME = {} # keep track the last request time for each voter_id
+RATE_LIMIT_SECONDS = 0.5 # allow one request per voter_id every 0.5 sec (protection against DoS attacks)
 
 # Load public keys database when the server starts
 def _load_public_keys_database_on_demand():
@@ -155,6 +159,18 @@ class VotingServerHandler(BaseHTTPRequestHandler):
                 print(f"Rejected vote due to missing fields: {', '.join(missing_fields)}")
                 return
 
+            # Simple DoS protecion function
+            current_time = time.time()
+            if voter_id in LAST_REQUEST_TIME:
+                time_since_last_request = current_time - LAST_REQUEST_TIME[voter_id]
+
+                if time_since_last_request < RATE_LIMIT_SECONDS:
+                    self.respond(429, {"error": f"Rate limit exceeded for voter_id '{voter_id}'. Please wait {RATE_LIMIT_SECONDS - int(time_since_last_request)} seconds."})
+                    print(f"Rejected vote from {voter_id} due to rate limit (DoS protection).")
+                    return
+
+            LAST_REQUEST_TIME[voter_id] = current_time # update last request time for this voter
+
             # Extract the candidate name and validate that the candidate is in the allowed list.
             # Return an error response if the candidate is not in the allowed list.
             if candidate not in ALLOWED_CANDIDATES:
@@ -237,6 +253,7 @@ class VotingServerHandler(BaseHTTPRequestHandler):
 
         global TALLY_SHARES
         global VOTE_COUNTS
+        global LAST_REQUEST_TIME # clear rate limit tracker when election opens
 
         content_length = int(self.headers['Content-Length']) if 'Content-Length' in self.headers else 0
         
@@ -255,6 +272,7 @@ class VotingServerHandler(BaseHTTPRequestHandler):
                         VOTE_COUNTS[candidate] = 0
                         TALLY_SHARES[candidate] = [] # clear previous shares
                     BALLOTS.clear()
+                    LAST_REQUEST_TIME.clear() # clear rate limit tracker
                     self.respond(200, {"message": "Election opened successfully."})
                     print("ADMIN: Election state changed to OPEN. Vote counts reset.")
             
