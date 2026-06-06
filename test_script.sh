@@ -1,6 +1,5 @@
-# Script used to test the e-voting system automatically
-
 #!/bin/bash
+# Script used to test the e-voting system automatically
 
 # Ensure cleanup is run before starting
 ./cleanup.sh

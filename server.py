@@ -1,6 +1,4 @@
-# Step 1: Import helper functions for handling web requests and JSON responses
-#   Import functions from cryptography.io for cryptographic operations.
-#   You will also need to import functions to parse URLs and to support threading. 
+# Voting server: HTTP API, JSON handling, ECDSA verification, URL parsing and threading.
 from http.server import BaseHTTPRequestHandler, HTTPServer
 import json
 import os
@@ -21,12 +19,11 @@ TALLY_SHAMIR_PRIME = next_probable_prime_at_least(1000)
 PUBLIC_FINAL_TALLY = None
 
 
-# Step 2: Create a threading lock to protect concurrent access to shared data and a simple shared state container with an initial value of CLOSED.
+# Lock guarding all shared mutable state against concurrent requests; election starts CLOSED.
 election_state_lock = threading.Lock()
 ELECTION_STATE = {"status": "CLOSED"} # possible states "open" and "closed" for now..
 
-# Step 3: Use a dictionary to store vote counts for each candidate. It should be held in memory and updated as votes are received.
-# Your voting server should accept votes for three candidates: Alice, Bob and Charlie.
+# In-memory vote tally. The election runs with three fixed candidates.
 VOTE_COUNTS = {
     "Alice": 0,
     "Bob": 0,
@@ -48,7 +45,7 @@ PUBLIC_KEYS_DATABASE = {} # will hold loaded public keys
 LAST_REQUEST_TIME = {} # keep track the last request time for each voter_id
 RATE_LIMIT_SECONDS = 0.5 # allow one request per voter_id every 0.5 sec (protection against DoS attacks)
 
-# Load public keys database when the server starts
+# Load (or reload) the registrar's public-key database from disk.
 def _load_public_keys_database_on_demand():
     global PUBLIC_KEYS_DATABASE
     if os.path.exists(PUBLIC_KEYS_DB_FILE):
@@ -66,11 +63,14 @@ def _load_public_keys_database_on_demand():
 
 _load_public_keys_database_on_demand() # initial load on server startup
 
-# Step 4: Initialize an empty list to hold incoming ballots. 
+# Voter IDs that have already cast a valid vote, used to prevent double voting.
+VOTED_IDS = set()
+
+# Audit log of accepted ballots.
 BALLOTS = []
 
-# Step 5: Define a function to load the public key for a given voter ID from the registrar's database.
-#   This key is used to verify the signature on the submitted vote.
+# Load and deserialize a voter's public key for signature verification.
+# Returns None if the voter is unknown or the stored key is invalid.
 def load_public_key_for_voter(voter_id):
 
     public_pem_str = PUBLIC_KEYS_DATABASE.get(voter_id)
@@ -90,12 +90,9 @@ def load_public_key_for_voter(voter_id):
         print(f"Error loading public key for voter ID '{voter_id}': {e}")
         return None
 
-# Step 6: Define a custom request handler class to manage incoming HTTP requests.
-# It should handle POST requests.
+# HTTP handler for the voting API: vote submission, admin actions, and status/results endpoints.
 class VotingServerHandler(BaseHTTPRequestHandler):
-    # Write a function respond that:
-    #   Sends a HTTP response to the client.
-    #   It should set the HTTP status code (as input to the function).
+    # Send a JSON HTTP response with the given status code.
     def respond(self, status_code, data=None, content_type='application/json'):
         self.send_response(status_code)
         self.send_header('Content-type', content_type)
@@ -103,14 +100,9 @@ class VotingServerHandler(BaseHTTPRequestHandler):
         if data:
             self.wfile.write(json.dumps(data).encode('utf-8'))
 
-    # Write a function do_POST(self) that:
-    #   Checks that the incoming request contains JSON data.
-    #   Your function should accept votes only when election is open.
-    #   Extract the candidate name and validate that the candidate is in the allowed list defined in step 3.
-    #   Return an error response if the candidate is not in the allowed list.
-    #   Check for any missing fields in the JSON data. Return an error response if any fields are missing.
-    #   Verify the signature.
-    #   If the candidate is in the allowed list, there are no missing fields, and the signature verifies, increment the vote count for that candidate and return a success message.
+    #   Route POST requests: admin actions (/open, /close, /reload_keys), vote casting, and tally publication.
+    #   A vote is accepted only if the election is open, all fields are present, the candidate is valid,
+    #   and the ECDSA signature verifies against the voter's registered public key.
     def do_POST(self):
         # Admin can open and close election, as well as reload keys
         if self.path in ['/open', '/close', '/reload_keys']:
@@ -119,14 +111,14 @@ class VotingServerHandler(BaseHTTPRequestHandler):
 
         # Vote handling
         if self.path == '/vote':
-            # Your function should accept votes only when election is open.
+            # Only accept votes while the election is OPEN.
             with election_state_lock:
                 if ELECTION_STATE["status"] != "OPEN":
                     self.respond(403, {"error": "Election is not open for voting."})
                     print("Rejected vote: Election is closed.")
                     return
 
-            # Checks that the incoming request contains JSON data
+            # Require a JSON body.
             content_type = self.headers.get('Content-Type')
             if content_type != 'application/json':
                 self.respond(400, {"error": "Content-Type must be application/json"})
@@ -145,7 +137,7 @@ class VotingServerHandler(BaseHTTPRequestHandler):
             candidate = request_data.get('candidate')
             sign_b64 = request_data.get('signature')
 
-            # Check for any missing fields in the JSON data. Return an error response if any fields are missing.
+            # Reject the request if any required field is missing.
             missing_fields = []
             if voter_id is None:
                 missing_fields.append("voter_id")
@@ -159,7 +151,7 @@ class VotingServerHandler(BaseHTTPRequestHandler):
                 print(f"Rejected vote due to missing fields: {', '.join(missing_fields)}")
                 return
 
-            # Simple DoS protecion function
+            # Rate-limit per voter to throttle rapid repeat requests (basic DoS protection).
             current_time = time.time()
             if voter_id in LAST_REQUEST_TIME:
                 time_since_last_request = current_time - LAST_REQUEST_TIME[voter_id]
@@ -171,14 +163,13 @@ class VotingServerHandler(BaseHTTPRequestHandler):
 
             LAST_REQUEST_TIME[voter_id] = current_time # update last request time for this voter
 
-            # Extract the candidate name and validate that the candidate is in the allowed list.
-            # Return an error response if the candidate is not in the allowed list.
+            # Reject unknown candidates.
             if candidate not in ALLOWED_CANDIDATES:
                 self.respond(400, {"error": f"Invalid candidate: {candidate}. Allowed candidates are: {', '.join(ALLOWED_CANDIDATES)}"})
                 print(f"Rejected vote from {voter_id} due to invalid candidate: {candidate}")
                 return
 
-            # Verify the signature.
+            # Verify the ECDSA signature against the voter's registered public key.
             public_key = load_public_key_for_voter(voter_id)
             if public_key is None:
                 self.respond(400, {"error": f"Voter ID '{voter_id}' is not registered or public key is invalid. Please ensure keys are registered and reloaded."})
@@ -191,7 +182,7 @@ class VotingServerHandler(BaseHTTPRequestHandler):
                 print(f"Rejected vote from {voter_id} due to invalid signature format.")
                 return
 
-            # Reconstruct the message that was signed by the client (must be identical)
+            # Rebuild the exact message the client signed; it must match byte-for-byte.
             message_to_verify = f"{voter_id},{candidate}".encode('utf-8')
 
             try:
@@ -200,10 +191,15 @@ class VotingServerHandler(BaseHTTPRequestHandler):
                     message_to_verify,
                     ec.ECDSA(hashes.SHA256())
                 )
-                # If the candidate is in the allowed list, there are no missing fields, and the signature verifies,
-                # increment the vote count for that candidate and return a success message.
-                with election_state_lock: # Protect VOTE_COUNTS and BALLOTS access
+                # Signature valid: record the vote and keep the ballot for auditing.
+                with election_state_lock: # Protect VOTE_COUNTS, BALLOTS and VOTED_IDS access
+                    # Reject a second vote from a voter who has already voted.
+                    if voter_id in VOTED_IDS:
+                        self.respond(409, {"error": f"Voter '{voter_id}' has already voted."})
+                        print(f"Rejected duplicate vote from {voter_id}.")
+                        return
                     VOTE_COUNTS[candidate] += 1
+                    VOTED_IDS.add(voter_id)
                     BALLOTS.append(request_data) # Store the ballot for auditing
 
                 print(f"VALID vote recorded from {voter_id} for: {candidate}. Current tally: {VOTE_COUNTS[candidate]}")
@@ -272,6 +268,7 @@ class VotingServerHandler(BaseHTTPRequestHandler):
                         VOTE_COUNTS[candidate] = 0
                         TALLY_SHARES[candidate] = [] # clear previous shares
                     BALLOTS.clear()
+                    VOTED_IDS.clear() # let voters vote again in the new election
                     LAST_REQUEST_TIME.clear() # clear rate limit tracker
                     self.respond(200, {"message": "Election opened successfully."})
                     print("ADMIN: Election state changed to OPEN. Vote counts reset.")
@@ -302,10 +299,7 @@ class VotingServerHandler(BaseHTTPRequestHandler):
             else:
                 self.respond(404, {"error": "Admin endpoint not found."})
 
-    # Write a function do_GET(self) that:
-    #   Handles GET requests used to retrieve the current vote results.
-    #   Your function should retrieve the current election status and only return the result if the election is closed. 
-    #   It should check that the request is targeting the /results endpoint and respond with the current vote tally in JSON format.
+    # Route GET requests: /status, /results (only once CLOSED and published), and /get_tally_shares.
     def do_GET(self):
         parsed_path = urlparse(self.path)
         path = parsed_path.path
@@ -376,9 +370,7 @@ class VotingServerHandler(BaseHTTPRequestHandler):
         else:
             self.respond(404, {"error": "Endpoint not found"})
         
-# Step 7: Write a function that sets up and runs the HTTP server.
-# It should bind to localhost on port 5000.
-# It should run until manually stopped.
+# Start the HTTP server on localhost:5000 and run until interrupted.
 def run_server(server_class=HTTPServer, handler_class=VotingServerHandler, port=5000):
     server_address = ('', port)
     httpd = server_class(server_address, handler_class)

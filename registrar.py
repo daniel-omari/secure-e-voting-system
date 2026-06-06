@@ -1,6 +1,3 @@
-# --- START OF FILE registrar.py ---
-
-# Step 1: Import helper functions and functions from cryptography.io for cryptographic operations.
 import json
 import os
 from cryptography.hazmat.primitives.asymmetric import ec
@@ -15,12 +12,9 @@ privateKeyDir = "private_keys"
 if not os.path.exists(privateKeyDir):
     os.makedirs(privateKeyDir)
 
-# Step 2: Generate an ECDSA key pair for a given voter ID.
-#   The private key is saved locally; the public key is returned for inclusion in the public database.
-#   Generate a new ECDSA private key using the SECP256R1 curve
-#   Serialize and save the private key to a PEM file (no encryption)
-#   Serialize the public key to a PEM string (used by the server for signature verification)
-def generate_key_pair(voter_id_prefix): # Corrected parameter name
+# Generate an ECDSA (SECP256R1) key pair for a voter: save the private key
+# locally as PEM and return the public key as a PEM string for the public DB.
+def generate_key_pair(voter_id_prefix):
     # Generate a new ECDSA private key using the SECP256R1 curve
     private_key = ec.generate_private_key(
         ec.SECP256R1(),
@@ -48,11 +42,8 @@ def generate_key_pair(voter_id_prefix): # Corrected parameter name
     return public_pem
 
 
-# Step 3: Define a function main that prompts the user for number of voters and generates key pairs for each.
-#   Ask the user how many voters to register
-#   Load existing public key database if it exists, or start a new one
-#   Generate key pairs for each voter and update the public key database
-#   Save the updated public key database to disk
+# Prompt for a voter count, generate a key pair for each, and write/update
+# the public-key database on disk.
 def main():
     print("Welcome to the Registrar Key Generation Tool!")
 

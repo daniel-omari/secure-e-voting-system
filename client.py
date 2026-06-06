@@ -1,7 +1,3 @@
-# This builds upon the skeleton code file for lab 1. Any instructions that are new have NEW at the beginning of the line.
-
-# Step 1: Import the requests library to send HTTP requests to the server.
-# Import libraries for cryptographic operations.
 import requests
 import json
 import os
@@ -12,16 +8,12 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.backends import default_backend
 import base64 # For encoding/decoding binary signatures to/from string for JSON
 
-# Step 2: Define the base URL of the server
-#   This should match the host and port used in server.py
 serverURL = "http://localhost:5000"
 privateKeyDir = "private_keys" # Directory where registrar saves private keys
-# Client-side known allowed candidates for pre-validation (optional but good for UX)
 allowedCandidates = ["Alice", "Bob", "Charlie"]
 
-# Step 3: Write a function that takes as input a voter ID and loads the voter's private key from a PEM file.
-#   This key is used to sign the vote before submission.
-#   The function should return an error if the voter ID is not an eligible voter.
+# Load a voter's ECDSA private key from its PEM file. Returns None if the voter
+# is not registered (no key file) or the key cannot be read.
 def loadPrivateVoterKey(voter_id: str) -> Optional[ec.EllipticCurvePrivateKey]:
     privateKeyPath = os.path.join(privateKeyDir, f"{voter_id}_private.pem")
     
@@ -45,9 +37,8 @@ def loadPrivateVoterKey(voter_id: str) -> Optional[ec.EllipticCurvePrivateKey]:
         print(f"Error: key file for '{voter_id}' appears corrupted or password-protected: {e}")
     return None
 
-# Step 4: Write a function to sign the vote.
-#   Your function should take as input a private signing key and a candidate, and should return a signature.
-#   Convert signature to hex string for transmission
+# Sign "voter_id,candidate" with the voter's key (ECDSA/SHA-256) and return the
+# signature base64-encoded for JSON transport.
 def createVoteSignature(private_key: ec.EllipticCurvePrivateKey, voter_id: str, candidate_name: str) -> str:
     # The message to be signed must be consistent with what the server expects to verify.
     # It includes the voter_id and candidate_name.
@@ -65,8 +56,7 @@ def createVoteSignature(private_key: ec.EllipticCurvePrivateKey, voter_id: str, 
     sign_b64 = base64.b64encode(signature).decode('utf-8')
     return sign_b64
 
-# NEW Step 5: Write a function to get the status of the server.
-#   NEW Your function should return the current status, or an error message if the status cannot be retrieved.
+# Return the current election status, or None if it can't be retrieved.
 def fetchElectionStatus(timeout: float = 3.0) -> Optional[str]:
     try:
         response = requests.get(f"{serverURL}/status", timeout=timeout)
@@ -83,15 +73,8 @@ def fetchElectionStatus(timeout: float = 3.0) -> Optional[str]:
         print(f"An unexpected error occurred while fetching status: {e}")
         return None
 
-# Step 6: Write a function to send a vote
-#   NEW Your function must first retrieve the status of the election. If the election is not open, or the election status cannot be retrieved, 
-#   NEW return an error message
-#   Generate a signature using the signing function in step 4.
-#   Prepare the headers and JSON payload
-#   Include voter ID, candidate name, and signature in the payload.
-#   Print the payload for testing purposes.
-#   Send a POST request to the /vote endpoint and raise an error if the server responds with a failure code (e.g. 400 or 500)
-#   Print the server's response (should be a confirmation message)
+# Sign and submit a vote. Only proceeds if the election is OPEN and the
+# candidate is valid; the server re-verifies the signature and eligibility.
 def submitVote(voter_id: str, candidate_name: str) -> None:
     elect_status = fetchElectionStatus()
     if elect_status is None:
@@ -141,11 +124,8 @@ def submitVote(voter_id: str, candidate_name: str) -> None:
     except Exception as e:
         print(f"An unexpected error occurred: {e}")
 
-# Step 7: Write a function to fetch current vote results
-#   First check the election status. Return the result only if the election status is "closed".
-#   Return an error message if status cannot be retrieved or status is "open".
-#   Send a GET request to the /results endpoint
-#   Print the vote tally in a readable format
+# Fetch and display the final tally. Only available once the election is CLOSED
+# and the admin has published the reconstructed result.
 def fetchResults() -> None:
     elect_status = fetchElectionStatus()
     if elect_status is None:
@@ -198,13 +178,7 @@ def fetchResults() -> None:
     except Exception as e:
         print(f"An unexpected error occurred: {e}")
 
-# Step 8: Create a simple command-line interface
-#   This lets users type commands to vote or view results
-#   The interface should prompt the user for their voter ID before alloing them to vote or view results.
-#   The voter ID must match a registered key.
-#   If the user types a vote command, extract the candidate name and send the vote
-#   If the user types 'results', fetch and display the current tally
-#   NEW If the user types 'status', fetch and display the election status.
+# Interactive CLI: log in by voter ID, then vote / view results / exit.
 def main() -> None:
     print("Welcome to the Voting Client!")
     print("Please enter your Voter ID to proceed.")

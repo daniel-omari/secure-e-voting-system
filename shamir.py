@@ -1,24 +1,11 @@
-# Step 1: Import modules for handling simple random choices and sampling.
 import random
 from typing import List, Tuple
 
-# Step 2: Define 'Share' as a tuple of two integerss to represent a secret share (index, value).
+# A secret share: (x-index, f(x) value).
 Share = Tuple[int, int]
 
-# Step 3: Define a function 'eval_polynomial' that evaluates a polynomial f(x) = s + f1*x^1 + f2*x^2 + ... + ft-1*x^{t-1} at a point x (modulo a prime).
-#   The function will be called in function generate_shares. 
-#   Your function should take as input:
-#       1. a list of coefficients 'coeffs'. The coefficients list coeffs is ordered so coeffs[0] is the constant term (i.e., secret s), coeffs[1] is f1, coeffs[2] is f2 and so on. 
-#       2. an integer 'x' (the point at which the polynomial will be evaluated)
-#       3. a prime number 'p' 
-#   Initialise two variables:
-#       1. 'result' will accumulate the value of the polynomial at point x. It should start at 0.
-#       2. 'power' will hold successive powers of x, beginning at x**0 = 1. 
-#   Evaluate the polynomial by looping through each coefficient c in coeffs:
-#       1. Multiply c by the current power and add to 'result'.
-#       2. Update the power by multiplying it by x.
-#       3. After the loop, return the result.
-#       4. Remember to perform all computations modulo prime p.
+# Evaluate polynomial f(x) at point x, modulo prime p.
+# coeffs[0] is the secret (constant term); the rest are the random coefficients.
 def eval_polynomial(coeffs: List[int], x: int, p: int) -> int:
     result = 0
     power = 1
@@ -27,20 +14,9 @@ def eval_polynomial(coeffs: List[int], x: int, p: int) -> int:
         power = (power * x) % p
     return result
 
-# Step 4: Define a function 'generate_shares' that will generate n shares.
-#   Your function should take as input:
-#       1. the secret to be shared 'secret'
-#       2. the number of shares to be created 'n'
-#       3. the threshold 't'
-#       4. prime number 'p'
-#   Construct a ranadom polynomial of degree t-1. 
-#       Your polynomial will be defined by its list of coefficients 'coeffs'
-#       Define coeffs[0] = secret
-#       For 1,...,t-1, the coefficient should be a random value chosen from the range 0,...,prime-1.
-#   Produce shares by evaluating the polynomial at x = 1,...,n. 
-#       That is, for each i = 1,...,n, compute y = f(i) using eval_polynomial. 
-#       Store each share as a tuple (i, y) in a list. 
-#   Return the list of shares.
+# Split `secret` into n shares with a recovery threshold of t, over prime field p.
+# Builds a random degree-(t-1) polynomial whose constant term is the secret,
+# then samples it at x = 1..n.
 def generate_shares(secret: int, n: int, t: int, p: int) -> List[Share]:
     if t > n:
         raise ValueError("Threshold (t) cannot be greater than the number of shares (n).")
@@ -55,11 +31,7 @@ def generate_shares(secret: int, n: int, t: int, p: int) -> List[Share]:
         shares.append((i, y))
     return shares
 
-# The following function reconstructs the polynomial for a list of shares. 
-# It uses a method callled Lagrange interpolation to compute f(0) given a list of shares. 
-# It takes as input:
-#   1. a list of elements 'i' incidcating which shares are being combined.
-#   2. a list of elements 'y', which are the shares corresponding to the 'i' indices. 
+# Recover f(0) (the secret) from a set of shares using Lagrange interpolation.
 def lagrange_interpolate_at_zero(x_s: List[int], y_s: List[int], prime: int) -> int:
     assert len(x_s) == len(y_s), "x_s and y_s must have the same length"
     k = len(x_s)
@@ -82,15 +54,7 @@ def lagrange_interpolate_at_zero(x_s: List[int], y_s: List[int], prime: int) -> 
         total = (total + yj * lj) % prime
     return total
 
-# Step 5: Define a function 'reconstruct' that will return the secret from a list of provided shares.
-#   Your function should take as input:
-#       1. a list of shares 'List'
-#       2. prime 'p'
-#   Separate the input list of tuples returned by generate_shares into two lists:
-#       1. x_s that will hold the first element of each tuple, the participants 'i' value
-#       2. y_s which will hold the corresponding share value
-#   Call function lagrange_interpolate_at_zero
-#   Return the secret
+# Reconstruct the secret from any t-or-more shares.
 def reconstruct(shares_subset: List[Share], p: int) -> int:
     if not shares_subset:
         raise ValueError("Cannot reconstruct secret from an empty list of shares.")
@@ -102,6 +66,7 @@ def reconstruct(shares_subset: List[Share], p: int) -> int:
 
     return lagrange_interpolate_at_zero(x_s, y_s, p)
 
+# Miller-Rabin probabilistic primality test.
 def is_probable_prime(n: int, rounds: int = 8) -> bool:
     if n < 2:
         return False
@@ -127,14 +92,15 @@ def is_probable_prime(n: int, rounds: int = 8) -> bool:
             return False
     return True
 
-
+# Smallest probable prime >= m, used to size the field for secret sharing.
 def next_probable_prime_at_least(m: int) -> int:
     candidate = m if m % 2 == 1 else m + 1
     while not is_probable_prime(candidate):
         candidate += 2
     return candidate
 
-# Step 6: Define a dunction demo() that will run and perform basic tests on your code. 
+# Self-test: share a secret, reconstruct from valid quorums, and show that
+# too-few shares or a tampered share fail to recover it.
 def demo():
 
     """
@@ -174,20 +140,20 @@ def demo():
             if expected_match:
                 print("  WARNING: Unexpected failure!")
 
-#   Reconstruct the secret from first t shares and print the result. 
+#   Reconstruct from the first t shares and print the result. 
     try_reconstruct(
         all_shares[:t],
         f"2. Reconstructing with exactly {t} shares (first {t} shares)"
     )
 
-#   Reconstruct the secret from an arbitrary subset of t shares. Print the result. 
+#   Reconstruct from an arbitrary subset of t shares. Print the result. 
     arbitrary_shares = [all_shares[1], all_shares[3], all_shares[4]]
     try_reconstruct(
         arbitrary_shares,
         f"3. Reconstructing with an arbitrary subset of {t} shares"
     )
 
-#   Attempt to reconstruct the secret with fewer than t shares.
+#   Fewer than t shares: should not recover the secret.
     fewer_shares = all_shares[:t-1] # Use t-1 shares
     try_reconstruct(
         fewer_shares,
@@ -195,7 +161,7 @@ def demo():
         expected_match=False # We expect it NOT to match, or to raise an error
     )
 
-#   Tamper a share and show that it returns a wrong value.
+#   Tampered share: should produce a wrong result.
     tampered_shares = list(all_shares[:t]) # Make a copy of first 't' shares
     # Choose a share to tamper, e.g., the first one
     original_val = tampered_shares[0][1]
