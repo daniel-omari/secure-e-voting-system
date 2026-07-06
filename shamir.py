@@ -1,4 +1,5 @@
 import random
+import secrets
 from typing import List, Tuple
 
 # A secret share: (x-index, f(x) value).
@@ -23,7 +24,10 @@ def generate_shares(secret: int, n: int, t: int, p: int) -> List[Share]:
     if secret >= p or secret < 0:
         raise ValueError("Secret must be in the range [0, p-1].")
 
-    coeffs = [secret] + [random.randint(0, p - 1) for _ in range(t - 1)]
+    # The random coefficients are key material: predict them and you can
+    # recover the secret from fewer than t shares. secrets (the OS CSPRNG)
+    # is used rather than random (Mersenne Twister), which is predictable.
+    coeffs = [secret] + [secrets.randbelow(p) for _ in range(t - 1)]
 
     shares = []
     for i in range(1, n + 1):
@@ -66,7 +70,8 @@ def reconstruct(shares_subset: List[Share], p: int) -> int:
 
     return lagrange_interpolate_at_zero(x_s, y_s, p)
 
-# Miller-Rabin probabilistic primality test.
+# Miller-Rabin probabilistic primality test. Plain `random` is fine here:
+# the witness bases only need to be arbitrary, not secret.
 def is_probable_prime(n: int, rounds: int = 8) -> bool:
     if n < 2:
         return False
@@ -111,7 +116,6 @@ def demo():
     - Shows failure with a tampered share.
     """
 
-    # You can use the values below to test your code. 
     prime = 2**127 - 1
     secret = 42
     n = 6
@@ -119,7 +123,6 @@ def demo():
 
     print(f"\nConfiguration: Secret={secret}, n={n} shares, t={t} threshold, Prime={prime}")
 
-#   Generate shares and print the shares.
     all_shares = generate_shares(secret, n, t, prime)
     print("\nGenerated Shares:")
     for i, (idx, val) in enumerate(all_shares):
@@ -140,13 +143,11 @@ def demo():
             if expected_match:
                 print("  WARNING: Unexpected failure!")
 
-#   Reconstruct from the first t shares and print the result. 
     try_reconstruct(
         all_shares[:t],
         f"2. Reconstructing with exactly {t} shares (first {t} shares)"
     )
 
-#   Reconstruct from an arbitrary subset of t shares. Print the result. 
     arbitrary_shares = [all_shares[1], all_shares[3], all_shares[4]]
     try_reconstruct(
         arbitrary_shares,

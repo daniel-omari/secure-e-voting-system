@@ -29,7 +29,8 @@ acting alone.
 ## Cryptography
 
 - **Shamir's Secret Sharing, implemented from scratch:** polynomial generation over a prime
-  field, modular arithmetic, and Lagrange interpolation to recover the secret at f(0).
+  field (coefficients drawn from the OS CSPRNG via `secrets`), modular arithmetic, and
+  Lagrange interpolation to recover the secret at f(0).
 - **Miller-Rabin primality testing** to generate the prime modulus.
 - **ECDSA** is provided by the audited `cryptography` library rather than a custom
   implementation, following the principle of not writing your own production crypto.
@@ -65,8 +66,19 @@ python3 admin.py reconstruct_tally   # reconstruct and publish the tally
 
 `cleanup.sh` removes generated keys and stops the server.
 
-## Scope
+## Scope and limitations
 
-This is an educational project. Parameters such as the small tally prime, unencrypted local
-key storage, and plain HTTP are appropriate for a coursework demo but would need hardening
-for any real deployment.
+This is an educational project: the goal was to apply the cryptographic primitives
+correctly, not to build a production election system. Known limitations, deliberate for a
+coursework demo but worth stating explicitly:
+
+- **Small tally prime.** Tally shares live in a field of ~1000 elements, so per-candidate
+  counts above the prime would wrap around. A real deployment would use a much larger prime.
+- **Votes are replayable across restarts.** The signed message is just `voter_id,candidate`
+  with no nonce or election identifier, and the double-vote record is in memory - restarting
+  the server would accept a captured ballot again. A nonce or election ID inside the signed
+  payload would fix this.
+- **Plain HTTP.** Transport encryption (TLS) is out of scope; signatures protect ballot
+  integrity but not confidentiality on the wire.
+- **Unencrypted local key storage.** Voter private keys are written to disk in the clear.
+- **In-memory election state.** Tallies and voter records do not survive a server restart.
